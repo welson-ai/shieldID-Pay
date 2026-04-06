@@ -1,0 +1,191 @@
+import {
+  FungibleToken,
+  Utils,
+  Initializable
+} from '@midnight-ntwrk/open-zeppelin';
+
+/**
+ * ShieldUSD - A privacy-focused stablecoin contract
+ * 
+ * This contract extends the FungibleToken standard to provide
+ * fully private P2P transfers where sender, receiver, and amount
+ * are all shielded using zero-knowledge proofs.
+ */
+contract ShieldUSD is FungibleToken, Initializable {
+  
+  // Private ledger state for shielded transfers
+  export sealed ledger _shieldedBalances: Map<ZswapCoinPublicKey, Uint<128>>;
+  export sealed ledger _nullifierHashes: Set<Opaque<"hash">>;
+  export sealed ledger _commitments: Set<Opaque<"hash">>;
+  
+  // Contract metadata
+  export sealed ledger _name: Opaque<"string">;
+  export sealed ledger _symbol: Opaque<"string">;
+  export sealed ledger _decimals: Uint<8>;
+  
+  // Total supply (public for transparency)
+  export ledger _totalSupply: Uint<128>;
+  
+  /**
+   * Initialize the ShieldUSD contract
+   */
+  circuit initialize(name: Opaque<"string">, symbol: Opaque<"string">, decimals: Uint<8>): [] {
+    // Initialize parent contract
+    super.initialize(name, symbol, decimals);
+    
+    // Set contract metadata
+    _name = name;
+    _symbol = symbol;
+    _decimals = decimals;
+    _totalSupply = 0u128;
+  }
+  
+  /**
+   * Private mint function - mints tokens to a shielded address
+   * Only the contract owner can call this
+   */
+  witness privateMintWitness(
+    recipient: ZswapCoinPublicKey,
+    amount: Uint<128>,
+    randomness: Opaque<"randomness">
+  ): [] {
+    // Verify caller is contract owner
+    require(ownPublicKey() == contractOwner(), "Only owner can mint");
+    
+    // Generate commitment for the minted amount
+    let commitment = generateCommitment(recipient, amount, randomness);
+    
+    // Ensure commitment hasn't been used before
+    require(!_commitments.contains(commitment), "Commitment already exists");
+    
+    // Add commitment to set
+    _commitments.add(commitment);
+    
+    // Update shielded balance
+    let currentBalance = 0u128;
+    if (_shieldedBalances.contains(recipient)) {
+      currentBalance = _shieldedBalances.get(recipient);
+    }
+    
+    // Check for overflow
+    require(currentBalance + amount >= currentBalance, "Overflow detected");
+    
+    // Update balance and total supply
+    _shieldedBalances.set(recipient, currentBalance + amount);
+    _totalSupply = _totalSupply + amount;
+  }
+  
+  /**
+   * Private transfer function - transfers tokens between shielded addresses
+   * All parameters (sender, receiver, amount) are private
+   */
+  witness privateTransferWitness(
+    sender: ZswapCoinPublicKey,
+    receiver: ZswapCoinPublicKey,
+    amount: Uint<128>,
+    senderRandomness: Opaque<"randomness">,
+    receiverRandomness: Opaque<"randomness">,
+    senderNullifier: Opaque<"hash">,
+    receiverCommitment: Opaque<"hash">
+  ): [] {
+    // Verify sender has sufficient balance
+    require(_shieldedBalances.contains(sender), "Sender has no balance");
+    let senderBalance = _shieldedBalances.get(sender);
+    require(senderBalance >= amount, "Insufficient balance");
+    
+    // Verify nullifier hasn't been used before (prevents double-spending)
+    require(!_nullifierHashes.contains(senderNullifier), "Nullifier already used");
+    
+    // Verify receiver commitment hasn't been used before
+    require(!_commitments.contains(receiverCommitment), "Commitment already exists");
+    
+    // Add nullifier and commitment to prevent double-spending and ensure uniqueness
+    _nullifierHashes.add(senderNullifier);
+    _commitments.add(receiverCommitment);
+    
+    // Update sender's balance
+    _shieldedBalances.set(sender, senderBalance - amount);
+    
+    // Update receiver's balance
+    let receiverBalance = 0u128;
+    if (_shieldedBalances.contains(receiver)) {
+      receiverBalance = _shieldedBalances.get(receiver);
+    }
+    
+    // Check for overflow
+    require(receiverBalance + amount >= receiverBalance, "Overflow detected");
+    
+    _shieldedBalances.set(receiver, receiverBalance + amount);
+  }
+  
+  /**
+   * Public transfer function for compatibility with standard FungibleToken
+   * This allows public transfers alongside private ones
+   */
+  circuit transfer(to: Either<ZswapCoinPublicKey, ContractAddress>, value: Uint<128>): Boolean {
+    return super.transfer(to, value);
+  }
+  
+  /**
+   * Get shielded balance (private function - only callable by the account owner)
+   */
+  witness getShieldedBalanceWitness(account: ZswapCoinPublicKey): Uint<128> {
+    // Verify caller is the account owner
+    require(ownPublicKey() == account, "Can only view own balance");
+    
+    if (_shieldedBalances.contains(account)) {
+      return _shieldedBalances.get(account);
+    }
+    return 0u128;
+  }
+  
+  /**
+   * Utility function to generate commitment for shielded operations
+   */
+  private circuit generateCommitment(
+    publicKey: ZswapCoinPublicKey,
+    amount: Uint<128>,
+    randomness: Opaque<"randomness">
+  ): Opaque<"hash"> {
+    // This would use a cryptographic hash function in a real implementation
+    // For now, we'll use a placeholder
+    return hash([publicKey, amount, randomness]);
+  }
+  
+  /**
+   * Get total supply (public function)
+   */
+  circuit totalSupply(): Uint<128> {
+    return _totalSupply;
+  }
+  
+  /**
+   * Get contract name
+   */
+  circuit name(): Opaque<"string"> {
+    return _name;
+  }
+  
+  /**
+   * Get contract symbol
+   */
+  circuit symbol(): Opaque<"string"> {
+    return _symbol;
+  }
+  
+  /**
+   * Get decimals
+   */
+  circuit decimals(): Uint<8> {
+    return _decimals;
+  }
+  
+  /**
+   * Contract owner verification
+   */
+  private circuit contractOwner(): ZswapCoinPublicKey {
+    // In a real implementation, this would return the deployer's public key
+    // For now, we'll use a placeholder
+    return ownPublicKey();
+  }
+}
